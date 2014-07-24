@@ -322,7 +322,12 @@ fn run_debuginfo_gdb_test(config: &Config, props: &TestProps, testfile: &Path) {
     };
 
     let config = &mut config;
-    let DebuggerCommands { commands, check_lines, .. } = parse_debugger_commands(testfile, "gdb");
+    let DebuggerCommands {
+        commands,
+        check_lines,
+        use_gdb_pretty_printer,
+        ..
+    } = parse_debugger_commands(testfile, "gdb");
     let mut cmds = commands.connect("\n");
 
     // compile test file (it should have 'compile-flags:-g' in the header)
@@ -333,7 +338,6 @@ fn run_debuginfo_gdb_test(config: &Config, props: &TestProps, testfile: &Path) {
 
     let exe_file = make_exe_name(config, testfile);
 
-    let mut proc_args;
     let debugger_run_result;
     match config.target.as_slice() {
         "arm-linux-androideabi" => {
@@ -453,6 +457,12 @@ fn run_debuginfo_gdb_test(config: &Config, props: &TestProps, testfile: &Path) {
         }
 
         _=> {
+            let rust_src_root = find_rust_src_root(config).expect("Could not find Rust source root");
+            let rust_pp_module_rel_path = Path::new("./src/etc");
+            let rust_pp_module_abs_path = rust_src_root.join(rust_pp_module_rel_path)
+                                                       .as_str()
+                                                       .unwrap()
+                                                       .to_string();
             // write debugger script
             let script_str = [
                 "set charset UTF-8".to_string(),
@@ -464,6 +474,12 @@ fn run_debuginfo_gdb_test(config: &Config, props: &TestProps, testfile: &Path) {
                              testfile,
                              script_str.as_slice(),
                              "debugger.script");
+
+            if use_gdb_pretty_printer {
+                // Only emit the gdb auto-loading script if pretty printers
+                // should actually be loaded
+                dump_gdb_autoload_script(config, testfile);
+            }
 
             // run debugger script with gdb
             #[cfg(windows)]
@@ -482,16 +498,27 @@ fn run_debuginfo_gdb_test(config: &Config, props: &TestProps, testfile: &Path) {
                 vec!("-quiet".to_string(),
                      "-batch".to_string(),
                      "-nx".to_string(),
+                     // Add the directory containing the pretty printers to
+                     // GDB's script auto loading safe path ...
+                     format!("-iex=add-auto-load-safe-path {}",
+                             rust_pp_module_abs_path.as_slice()),
+                     // ... and also the test directory
+                     format!("-iex=add-auto-load-safe-path {}",
+                             config.build_base.as_str().unwrap()),
                      format!("-command={}", debugger_script.as_str().unwrap()),
                      exe_file.as_str().unwrap().to_string());
-            proc_args = ProcArgs {
+
+            let proc_args = ProcArgs {
                 prog: debugger(),
                 args: debugger_opts,
             };
+
+            let environment = vec![("PYTHONPATH".to_string(), rust_pp_module_abs_path)];
+
             debugger_run_result = compose_and_run(config,
                                                   testfile,
                                                   proc_args,
-                                                  Vec::new(),
+                                                  environment,
                                                   config.run_lib_path.as_slice(),
                                                   None,
                                                   None);
@@ -503,6 +530,32 @@ fn run_debuginfo_gdb_test(config: &Config, props: &TestProps, testfile: &Path) {
     }
 
     check_debugger_output(&debugger_run_result, check_lines.as_slice());
+
+    fn dump_gdb_autoload_script(config: &Config, testfile: &Path) {
+        let mut script_path = output_base_name(config, testfile);
+        let mut script_file_name = script_path.filename().unwrap().to_vec();
+        script_file_name.push_all("-gdb.py".as_bytes());
+        script_path.set_filename(script_file_name.as_slice());
+
+        let script_content = "import gdb_rust_pretty_printing\n\
+                              gdb_rust_pretty_printing.register_printers(gdb.current_objfile())\n"
+                             .as_bytes();
+
+        File::create(&script_path).write(script_content).unwrap();
+    }
+}
+
+fn find_rust_src_root(config: &Config) -> Option<Path> {
+    let mut path = config.src_base.clone();
+    let path_postfix = Path::new("src/etc/lldb_batchmode.py");
+
+    while path.pop() {
+        if path.join(path_postfix.clone()).is_file() {
+            return Some(path);
+        }
+    }
+
+    return None;
 }
 
 fn run_debuginfo_lldb_test(config: &Config, props: &TestProps, testfile: &Path) {
@@ -532,7 +585,8 @@ fn run_debuginfo_lldb_test(config: &Config, props: &TestProps, testfile: &Path) 
     let DebuggerCommands {
         commands,
         check_lines,
-        breakpoint_lines
+        breakpoint_lines,
+        ..
     } = parse_debugger_commands(testfile, "lldb");
 
     // Write debugger script:
@@ -618,6 +672,7 @@ struct DebuggerCommands {
     commands: Vec<String>,
     check_lines: Vec<String>,
     breakpoint_lines: Vec<uint>,
+    use_gdb_pretty_printer: bool
 }
 
 fn parse_debugger_commands(file_path: &Path, debugger_prefix: &str)
@@ -630,6 +685,7 @@ fn parse_debugger_commands(file_path: &Path, debugger_prefix: &str)
     let mut breakpoint_lines = vec!();
     let mut commands = vec!();
     let mut check_lines = vec!();
+    let mut use_gdb_pretty_printer = false;
     let mut counter = 1;
     let mut reader = BufferedReader::new(File::open(file_path).unwrap());
     for line in reader.lines() {
@@ -637,6 +693,10 @@ fn parse_debugger_commands(file_path: &Path, debugger_prefix: &str)
             Ok(line) => {
                 if line.as_slice().contains("#break") {
                     breakpoint_lines.push(counter);
+                }
+
+                if line.as_slice().contains("gdb-use-pretty-printer") {
+                    use_gdb_pretty_printer = true;
                 }
 
                 header::parse_name_value_directive(
@@ -662,7 +722,8 @@ fn parse_debugger_commands(file_path: &Path, debugger_prefix: &str)
     DebuggerCommands {
         commands: commands,
         check_lines: check_lines,
-        breakpoint_lines: breakpoint_lines
+        breakpoint_lines: breakpoint_lines,
+        use_gdb_pretty_printer: use_gdb_pretty_printer,
     }
 }
 
