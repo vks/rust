@@ -230,6 +230,9 @@ static UNKNOWN_COLUMN_NUMBER: c_uint = 0;
 static UNKNOWN_FILE_METADATA: DIFile = (0 as DIFile);
 static UNKNOWN_SCOPE_METADATA: DIScope = (0 as DIScope);
 
+static FLAGS_NONE: c_uint = 0;
+static FLAGS_ARTIFICAL: c_uint = llvm::debuginfo::FlagArtificial as c_uint;
+
 //=-----------------------------------------------------------------------------
 //  Public Interface of debuginfo module
 //=-----------------------------------------------------------------------------
@@ -1721,6 +1724,7 @@ struct MemberDescription {
     llvm_type: Type,
     type_metadata: DIType,
     offset: MemberOffset,
+    flags: c_uint
 }
 
 // A factory for MemberDescriptions. It produces a list of member descriptions
@@ -1879,6 +1883,7 @@ impl StructMemberDescriptionFactory {
                 llvm_type: type_of::type_of(cx, field.mt.ty),
                 type_metadata: type_metadata(cx, field.mt.ty, self.span),
                 offset: offset,
+                flags: FLAGS_NONE,
             }
         }).collect()
     }
@@ -1939,6 +1944,7 @@ impl TupleMemberDescriptionFactory {
                 llvm_type: type_of::type_of(cx, component_type),
                 type_metadata: type_metadata(cx, component_type, self.span),
                 offset: ComputedMemberOffset,
+                flags: FLAGS_NONE,
             }
         }).collect()
     }
@@ -2024,6 +2030,7 @@ impl EnumMemberDescriptionFactory {
                             llvm_type: variant_llvm_type,
                             type_metadata: variant_type_metadata,
                             offset: FixedMemberOffset { bytes: 0 },
+                            flags: FLAGS_NONE
                         }
                     }).collect()
             },
@@ -2057,6 +2064,7 @@ impl EnumMemberDescriptionFactory {
                             llvm_type: variant_llvm_type,
                             type_metadata: variant_type_metadata,
                             offset: FixedMemberOffset { bytes: 0 },
+                            flags: FLAGS_NONE
                         }
                     ]
                 }
@@ -2090,6 +2098,7 @@ impl EnumMemberDescriptionFactory {
                     llvm_type: non_null_llvm_type,
                     type_metadata: non_null_type_metadata,
                     offset: FixedMemberOffset { bytes: 0 },
+                    flags: FLAGS_NONE
                 };
 
                 let unique_type_id = debug_context(cx).type_map
@@ -2127,6 +2136,7 @@ impl EnumMemberDescriptionFactory {
                         llvm_type: artificial_struct_llvm_type,
                         type_metadata: artificial_struct_metadata,
                         offset: FixedMemberOffset { bytes: 0 },
+                        flags: FLAGS_NONE
                     }
                 ]
             },
@@ -2171,6 +2181,7 @@ impl EnumMemberDescriptionFactory {
                         llvm_type: variant_llvm_type,
                         type_metadata: variant_type_metadata,
                         offset: FixedMemberOffset { bytes: 0 },
+                        flags: FLAGS_NONE
                     }
                 ]
             },
@@ -2197,6 +2208,11 @@ impl VariantMemberDescriptionFactory {
                     _ => type_metadata(cx, ty, self.span)
                 },
                 offset: ComputedMemberOffset,
+                flags: if self.discriminant_type_metadata.is_some() &&  i == 0 {
+                    FLAGS_ARTIFICAL
+                } else {
+                    FLAGS_NONE
+                }
             }
         }).collect()
     }
@@ -2512,7 +2528,7 @@ fn set_members_of_composite_type(cx: &CrateContext,
                         bytes_to_bits(member_size),
                         bytes_to_bits(member_align),
                         bytes_to_bits(member_offset),
-                        0,
+                        member_description.flags,
                         member_description.type_metadata)
                 }
             })
@@ -2599,30 +2615,35 @@ fn at_box_metadata(cx: &CrateContext,
             llvm_type: *member_llvm_types.get(0),
             type_metadata: type_metadata(cx, int_type, codemap::DUMMY_SP),
             offset: ComputedMemberOffset,
+            flags: FLAGS_ARTIFICAL,
         },
         MemberDescription {
             name: "drop_glue".to_string(),
             llvm_type: *member_llvm_types.get(1),
             type_metadata: nil_pointer_type_metadata,
             offset: ComputedMemberOffset,
+            flags: FLAGS_ARTIFICAL,
         },
         MemberDescription {
             name: "prev".to_string(),
             llvm_type: *member_llvm_types.get(2),
             type_metadata: nil_pointer_type_metadata,
             offset: ComputedMemberOffset,
+            flags: FLAGS_ARTIFICAL,
         },
         MemberDescription {
             name: "next".to_string(),
             llvm_type: *member_llvm_types.get(3),
             type_metadata: nil_pointer_type_metadata,
             offset: ComputedMemberOffset,
+            flags: FLAGS_ARTIFICAL,
         },
         MemberDescription {
             name: "val".to_string(),
             llvm_type: *member_llvm_types.get(4),
             type_metadata: content_type_metadata,
             offset: ComputedMemberOffset,
+            flags: FLAGS_ARTIFICAL,
         }
     ];
 
@@ -2731,18 +2752,21 @@ fn heap_vec_metadata(cx: &CrateContext,
             llvm_type: *member_llvm_types.get(0),
             type_metadata: int_type_metadata,
             offset: ComputedMemberOffset,
+            flags: FLAGS_ARTIFICAL,
         },
         MemberDescription {
             name: "alloc".to_string(),
             llvm_type: *member_llvm_types.get(1),
             type_metadata: int_type_metadata,
             offset: ComputedMemberOffset,
+            flags: FLAGS_ARTIFICAL,
         },
         MemberDescription {
             name: "elements".to_string(),
             llvm_type: *member_llvm_types.get(2),
             type_metadata: array_type_metadata,
             offset: ComputedMemberOffset,
+            flags: FLAGS_ARTIFICAL,
         }
     ];
 
@@ -2798,12 +2822,14 @@ fn vec_slice_metadata(cx: &CrateContext,
             llvm_type: *member_llvm_types.get(0),
             type_metadata: element_type_metadata,
             offset: ComputedMemberOffset,
+            flags: FLAGS_ARTIFICAL
         },
         MemberDescription {
             name: "length".to_string(),
             llvm_type: *member_llvm_types.get(1),
             type_metadata: type_metadata(cx, ty::mk_uint(), span),
             offset: ComputedMemberOffset,
+            flags: FLAGS_ARTIFICAL
         },
     ];
 
