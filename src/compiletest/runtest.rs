@@ -19,6 +19,7 @@ use util::logv;
 #[cfg(target_os = "win32")]
 use util;
 
+use std::from_str::FromStr;
 use std::io::File;
 use std::io::fs;
 use std::io::net::tcp;
@@ -315,6 +316,7 @@ actual:\n\
 }
 
 fn run_debuginfo_gdb_test(config: &Config, props: &TestProps, testfile: &Path) {
+
     let mut config = Config {
         target_rustcflags: cleanup_debug_info_options(&config.target_rustcflags),
         host_rustcflags: cleanup_debug_info_options(&config.host_rustcflags),
@@ -465,11 +467,38 @@ fn run_debuginfo_gdb_test(config: &Config, props: &TestProps, testfile: &Path) {
                                                        .unwrap()
                                                        .to_string();
             // write debugger script
-            let script_str = [
-                "set charset UTF-8".to_string(),
-                cmds,
-                "quit\n".to_string()
-            ].connect("\n");
+            let mut script_str = String::with_capacity(2048);
+
+            script_str.push_str("set charset UTF-8\n");
+            script_str.push_str("show version\n");
+
+            match config.gdb_version {
+                Some(ref version) => {
+                    if gdb_version_to_int(version.as_slice()) > gdb_version_to_int("7.3") {
+                        // Add the directory containing the pretty printers to
+                        // GDB's script auto loading safe path ...
+                        script_str.push_str(
+                            format!("add-auto-load-safe-path {}\n",
+                                    rust_pp_module_abs_path.as_slice())
+                                .as_slice());
+                        // ... and also the test directory
+                        script_str.push_str(
+                            format!("add-auto-load-safe-path {}\n",
+                                    config.build_base.as_str().unwrap())
+                                .as_slice());
+                    }
+                }
+                _ => { /* nothing to do */ }
+            }
+
+            // Load the target executable
+            script_str.push_str(format!("file {}\n",
+                                        exe_file.as_str().unwrap())
+                                    .as_slice());
+
+            script_str.push_str(cmds.as_slice());
+            script_str.push_str("quit\n");
+
             debug!("script_str = {}", script_str);
             dump_output_file(config,
                              testfile,
@@ -499,15 +528,7 @@ fn run_debuginfo_gdb_test(config: &Config, props: &TestProps, testfile: &Path) {
                 vec!("-quiet".to_string(),
                      "-batch".to_string(),
                      "-nx".to_string(),
-                     // Add the directory containing the pretty printers to
-                     // GDB's script auto loading safe path ...
-                     format!("-iex=add-auto-load-safe-path {}",
-                             rust_pp_module_abs_path.as_slice()),
-                     // ... and also the test directory
-                     format!("-iex=add-auto-load-safe-path {}",
-                             config.build_base.as_str().unwrap()),
-                     format!("-command={}", debugger_script.as_str().unwrap()),
-                     exe_file.as_str().unwrap().to_string());
+                     format!("-command={}", debugger_script.as_str().unwrap()));
 
             let proc_args = ProcArgs {
                 prog: debugger(),
@@ -543,6 +564,23 @@ fn run_debuginfo_gdb_test(config: &Config, props: &TestProps, testfile: &Path) {
                              .as_bytes();
 
         File::create(&script_path).write(script_content).unwrap();
+    }
+
+    fn gdb_version_to_int(version_string: &str) -> int {
+        let error_string = format!(
+            "Encountered GDB version string with unexpected format: {}",
+            version_string);
+
+        let components: Vec<&str> = version_string.trim().split('.').collect();
+
+        if components.len() != 2 {
+            fatal(error_string.as_slice());
+        }
+
+        let major: int = FromStr::from_str(components[0]).expect(error_string.as_slice());
+        let minor: int = FromStr::from_str(components[1]).expect(error_string.as_slice());
+
+        return major * 1000 + minor;
     }
 }
 
