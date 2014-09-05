@@ -1991,7 +1991,7 @@ impl<A: Add<A, A> + PartialOrd + Clone + ToPrimitive> Iterator<A> for Range<A> {
         };
 
         match bound {
-            Some(b) => (b, Some(b)),
+            Some(b) => (b, None),
             // Standard fallback for unbounded/unrepresentable bounds
             None => (0, None)
         }

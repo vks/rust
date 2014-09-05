@@ -750,6 +750,24 @@ fn test_range() {
 }
 
 #[test]
+fn test_issue17010() {
+    // Generate an infinite range because 16777300f32 + 1 = 16777300f32.
+    // Make it finite.
+    let mut bad_range = myrange(16777200f32, 16777300.).take(200);
+
+    let (min, max) = bad_range.size_hint();
+    let max = max.unwrap();
+
+    let min = min.to_f64().unwrap();
+    let count = bad_range.count().to_f64().unwrap();
+    let max = max.to_f64().unwrap();
+
+    // Make sure the size hint is correct.
+    assert!(min <= count);
+    assert!(count <= max);
+}
+
+#[test]
 fn test_range_inclusive() {
     assert!(range_inclusive(0i, 5).collect::<Vec<int>>() ==
             vec![0i, 1, 2, 3, 4, 5]);
